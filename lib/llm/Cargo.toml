@@ -91,7 +91,7 @@ dynamo-parsers-v2 = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
-bytes = { workspace = true }
+bytes = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 derive_builder = { workspace = true }
@@ -111,7 +111,7 @@ percent-encoding = "2.3.2"
 prometheus = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 strum = { workspace = true }
 tempfile = { workspace = true }

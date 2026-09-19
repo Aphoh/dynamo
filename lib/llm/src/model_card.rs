@@ -1360,6 +1360,16 @@ impl ModelDeploymentCard {
         self.tokenizer_id_bound.get().copied()
     }
 
+    /// Native SGLang text is untamplated and uses the HF tokenizer's special tokens.
+    pub(crate) fn native_generate_tokenizer(&self) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+        self.tokenizer_with_options(
+            crate::tokenizers::TokenizerOptions {
+                add_special_tokens: true,
+            },
+            true,
+        )
+    }
+
     pub(crate) fn embedding_tokenizer_with_options(
         &self,
         options: crate::tokenizers::TokenizerOptions,

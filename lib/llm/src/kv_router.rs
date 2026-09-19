@@ -62,6 +62,7 @@ pub mod encoder_router;
 pub mod indexer;
 pub mod metrics;
 pub(crate) mod metrics_subscriber;
+pub mod native;
 pub mod plugins;
 pub mod prefill_router;
 pub mod publisher;
@@ -2961,6 +2962,39 @@ mod tests {
             trace, golden,
             "selection drifted from the frozen frontend trace"
         );
+    }
+
+    #[tokio::test]
+    async fn native_reservation_releases_load_when_http_finishes() {
+        let router = Arc::new(tracked_router("native-reservation").await);
+        let admitted = router
+            .find_best_match_details_with_policy_class_admitted(
+                Some("native-child"),
+                &[1, 2, 3, 4],
+                None,
+                None,
+                true,
+                false,
+                None,
+                None,
+                0.0,
+                0,
+                None,
+                None,
+                Some(16),
+                None,
+                None,
+                RoutingConstraints::default(),
+            )
+            .await
+            .unwrap();
+        let reservation = native::NativeReservation::new(router.clone(), admitted.booking.unwrap());
+        reservation.touch().unwrap();
+        assert!(router.selection.scheduler().has_request("native-child"));
+        reservation.finish().await;
+        assert!(!router.selection.scheduler().has_request("native-child"));
+        reservation.finish().await;
+        assert!(reservation.touch().is_err());
     }
 
     /// A lease released before `set_scheduler` is a wiring bug: it logs and
