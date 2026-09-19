@@ -62,7 +62,6 @@ pub mod encoder_router;
 pub mod indexer;
 pub mod metrics;
 pub(crate) mod metrics_subscriber;
-pub mod native;
 pub mod plugins;
 pub mod prefill_router;
 pub mod publisher;
@@ -81,6 +80,7 @@ pub use plugins::{
     router_plugin_registry as worker_selection_policy_registry,
 };
 pub use prefill_router::PrefillRouter;
+pub(crate) use routing_host::RouteReservation;
 pub use routing_host::{KvPushRouter, RoutingHost};
 pub use routing_load::{
     ManagedKvRouter, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender,
@@ -2988,7 +2988,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let reservation = native::NativeReservation::new(router.clone(), admitted.booking.unwrap());
+        let reservation = RouteReservation::new(router.clone(), admitted.booking.unwrap());
         reservation.touch().unwrap();
         assert!(router.selection.scheduler().has_request("native-child"));
         let guard = reservation.start(tokio_util::sync::CancellationToken::new());
