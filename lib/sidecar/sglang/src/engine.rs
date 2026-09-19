@@ -25,12 +25,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
 use crate::client::{self, Client, Discovery, KV_CONFIG_KEY, NodeMetadata, Pool, WORKER_GROUP_KEY};
-use crate::native_http::{self, NativeHttp, NativeHttpEndpoint};
+use crate::native_http::{self, NativeHttp};
 use crate::proto as pb;
 use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
     meta_u32, output_ids_to_u32, terminal_from_meta,
 };
+use dynamo_sidecar_common::http::HttpProxy;
 
 const RETRY_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -322,7 +323,7 @@ impl LLMEngine for SglangSidecarEngine {
                 client::invalid_arg("--enable-native-http requires a discovered SGLang HTTP port")
             })?;
             config.runtime_data.insert(
-                dynamo_backend_common::sglang_http::CAPABILITY.into(),
+                dynamo_backend_common::SGLANG_HTTP_CAPABILITY.into(),
                 true.into(),
             );
             Some(http)
@@ -372,11 +373,16 @@ impl LLMEngine for SglangSidecarEngine {
             .get()
             .ok_or_else(|| client::engine_shutdown("endpoint ready before start"))?;
         if let Some(http) = &state.native_wire_http {
-            let started = NativeHttpEndpoint::start(&endpoint, http, self.cancel.clone())
-                .await
-                .map_err(|error| {
-                    client::engine_shutdown(format!("native HTTP endpoint startup failed: {error}"))
-                })?;
+            let started = HttpProxy::start(
+                &endpoint,
+                http.transport.clone(),
+                &["/generate"],
+                self.cancel.clone(),
+            )
+            .await
+            .map_err(|error| {
+                client::engine_shutdown(format!("native HTTP endpoint startup failed: {error}"))
+            })?;
             *self.native_endpoint.lock().await = Some(started);
         }
         Ok(())
