@@ -40,9 +40,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-axum = { workspace = true }
-dynamo-llm = { workspace = true }
-reqwest = { workspace = true, features = ["gzip"] }
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 tokio = { workspace = true, features = ["test-util"] }
 
