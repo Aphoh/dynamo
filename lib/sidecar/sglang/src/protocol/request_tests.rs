@@ -32,6 +32,16 @@ fn assert_invalid(error: DynamoError, message: &str) {
 }
 
 #[test]
+fn native_token_envelope_requires_http_endpoint() {
+    let mut request = request();
+    request.extra_args = Some(json!({"sglang_tito": {"input_ids": [1]}}));
+    assert_invalid(
+        validate_request(&request).unwrap_err(),
+        "native SGLang requests require the HTTP endpoint",
+    );
+}
+
+#[test]
 fn request_maps_native_fields_and_full_width_room() {
     let mut request = request();
     request.bootstrap_info = Some(BootstrapInfo {

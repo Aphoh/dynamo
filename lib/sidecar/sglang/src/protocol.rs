@@ -217,6 +217,15 @@ pub(crate) fn routed_dp_rank(
 }
 
 fn validate_request(request: &PreprocessedRequest) -> Result<(), DynamoError> {
+    if request
+        .extra_args
+        .as_ref()
+        .is_some_and(|args| args.get("sglang_tito").is_some())
+    {
+        return Err(client::invalid_request(
+            "native SGLang requests require the HTTP endpoint and an updated frontend",
+        ));
+    }
     // prompt_embeds requests arrive with empty token_ids, so check them first.
     if request.prompt_embeds.is_some() {
         return Err(client::invalid_request(
