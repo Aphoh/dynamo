@@ -6,7 +6,6 @@
 mod args;
 mod endpoint;
 mod error;
-pub mod http;
 mod json;
 mod run;
 mod transport;

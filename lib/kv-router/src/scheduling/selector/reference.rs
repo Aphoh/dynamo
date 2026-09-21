@@ -1180,7 +1180,6 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
-                required_dp_rank: None,
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1240,7 +1239,6 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
-                required_dp_rank: None,
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1318,7 +1316,6 @@ mod tests {
                 pinned_worker: None,
                 allowed_worker_ids: None,
                 routing_constraints: crate::protocols::RoutingConstraints {
-                    required_dp_rank: None,
                     required_taints: HashSet::from([required_taint.clone()]),
                     preferred_taints: HashMap::new(),
                 },
@@ -1394,7 +1391,6 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
-                required_dp_rank: None,
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), 0.85)]),
             },
@@ -1466,7 +1462,6 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
-                required_dp_rank: None,
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), -0.25)]),
             },
