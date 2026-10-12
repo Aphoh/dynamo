@@ -28,6 +28,7 @@ use super::disconnect::{
     ConnectionHandle, create_connection_monitor, monitor_for_disconnects_with_error,
 };
 use super::error::SanitizedError;
+use super::metadata::MetadataHeaderError;
 use super::metrics::{CancellationLabels, ErrorType};
 use super::openai::{
     check_model_serving_ready, check_ready, context_from_headers, find_invalid_argument_in_chain,
@@ -293,18 +294,29 @@ async fn handler(
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "native SGLang routing failed before response headers");
-            let status = if error.is::<routing::NativeRequestError>()
-                || find_invalid_argument_in_chain(error.as_ref()).is_some()
-            {
-                StatusCode::BAD_REQUEST
-            } else if super::metrics::request_was_rejected(error.as_ref()) {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::SERVICE_UNAVAILABLE
-            };
-            error_response(status, error.to_string())
+            native_error_response(&error)
         }
     }
+}
+
+/// Only client errors keep their detail; server-side failures stay in the log.
+fn native_error_response(error: &anyhow::Error) -> Response {
+    if let Some(error) = error.downcast_ref::<MetadataHeaderError>() {
+        return adapt_openai_error(super::openai::ErrorMessage::request_headers_too_large(
+            &error.to_string(),
+        ));
+    }
+    if error.is::<routing::NativeRequestError>()
+        || find_invalid_argument_in_chain(error.as_ref()).is_some()
+    {
+        return error_response(StatusCode::BAD_REQUEST, error.to_string());
+    }
+    let error = if super::metrics::request_was_rejected(error.as_ref()) {
+        SanitizedError::Overloaded
+    } else {
+        SanitizedError::Unavailable
+    };
+    error_response(error.status(), error.to_string())
 }
 
 async fn legacy_handler(
@@ -682,6 +694,56 @@ mod tests {
 
             assert_eq!(error_type, expected_type);
             assert_eq!(body["error"]["message"], expected_message);
+        }
+    }
+
+    #[tokio::test]
+    async fn native_errors_keep_detail_only_for_client_errors() {
+        use dynamo_runtime::error::{DynamoError, ErrorType as DynamoErrorType};
+
+        let typed = |error_type| {
+            anyhow::Error::new(
+                DynamoError::builder()
+                    .error_type(error_type)
+                    .message("worker 7 at 10.0.0.1:30000")
+                    .build(),
+            )
+        };
+        for (error, status, message) in [
+            (
+                anyhow::Error::new(MetadataHeaderError::TooManyEntries { limit: 64 }),
+                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "metadata headers exceed the limit of 64 entries",
+            ),
+            (
+                typed(DynamoErrorType::InvalidArgument),
+                StatusCode::BAD_REQUEST,
+                "worker 7 at 10.0.0.1:30000",
+            ),
+            (
+                typed(DynamoErrorType::WorkerOverloaded),
+                SanitizedError::Overloaded.status(),
+                "Service temporarily overloaded",
+            ),
+            (
+                anyhow::anyhow!("connect to 10.0.0.1:30000 failed"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable",
+            ),
+        ] {
+            let response = native_error_response(&error);
+            assert_eq!(response.status(), status, "{error}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let actual = body["error"]["message"].as_str().unwrap();
+            assert!(actual.contains(message), "{error}: {actual}");
+            assert_eq!(
+                actual.contains("10.0.0.1"),
+                status == StatusCode::BAD_REQUEST,
+                "{actual}"
+            );
         }
     }
 
