@@ -241,6 +241,8 @@ pub struct PrefillRouter {
     /// Namespace (used for logging / lifecycle messages).
     namespace: String,
     task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
+    /// Whether the frontend serves native SGLang generate through this router.
+    native_generate: bool,
     /// Initialization and worker availability state.
     lifecycle: AtomicU8,
     #[cfg(test)]
@@ -301,6 +303,7 @@ struct PrefillBuildContext {
     load_thresholds: crate::discovery::LoadThresholdHandle,
     parent_token: CancellationToken,
     task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
+    native_generate: bool,
 }
 
 pub(crate) trait PrefillRouterLifecycle: Send + Sync {

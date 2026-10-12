@@ -655,6 +655,7 @@ impl ModelWatcher {
                     load_thresholds.clone(),
                     cancellation.child_token(),
                     Some(allocator_trim.clone()),
+                    needs_native_generate,
                 ))
             } else {
                 None

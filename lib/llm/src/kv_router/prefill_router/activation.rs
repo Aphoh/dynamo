@@ -148,6 +148,7 @@ impl PrefillRouter {
             load_thresholds,
             parent_token,
             None,
+            false,
         )
     }
 }
@@ -177,6 +178,7 @@ impl PrefillRouter {
             model_name: String::new(), // Not used for disabled router
             namespace: String::new(),  // Not used for disabled router
             task_guard: None,
+            native_generate: false,
             lifecycle: std::sync::atomic::AtomicU8::new(PrefillLifecycleState::Pending as u8),
             #[cfg(test)]
             activation_task_state: Arc::new(()),
@@ -199,6 +201,7 @@ impl PrefillRouter {
         load_thresholds: LoadThresholdHandle,
         parent_token: tokio_util::sync::CancellationToken,
         task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
+        native_generate: bool,
     ) -> Arc<Self> {
         let cancel_token = parent_token.child_token();
         let (target_tx, target_rx) = watch::channel(None);
@@ -229,6 +232,7 @@ impl PrefillRouter {
             model_name,
             namespace,
             task_guard: task_guard.clone(),
+            native_generate,
             lifecycle: std::sync::atomic::AtomicU8::new(PrefillLifecycleState::Pending as u8),
             #[cfg(test)]
             activation_task_state: Arc::new(()),
@@ -424,9 +428,10 @@ impl PrefillRouter {
 
         let native = match &target {
             WorkerSetTarget::Committed(target)
-                if crate::http::service::sglang_generate::routing::supports_native(
-                    &target.card,
-                ) =>
+                if context.native_generate
+                    && crate::http::service::sglang_generate::routing::supports_native(
+                        &target.card,
+                    ) =>
             {
                 Some(Arc::new(
                     NativeGenerateBinding::new(
@@ -551,6 +556,7 @@ impl PrefillRouter {
                 load_thresholds: load_thresholds.clone(),
                 parent_token: cancel_token.child_token(),
                 task_guard: router_ref.task_guard.clone(),
+                native_generate: router_ref.native_generate,
             };
             drop(router_ref);
             let build = Self::build_binding(
@@ -894,6 +900,11 @@ mod tests {
         let target = |generation, block_size, admitted_ids| {
             let mut selected = card(Some(RouterConfig::new(RouterMode::KV, kv_config.clone())));
             selected.kv_cache_block_size = block_size;
+            // Native-capable prefill must stay token-only unless the frontend enables native.
+            selected.runtime_config.runtime_data.insert(
+                crate::protocols::sglang::HTTP_CAPABILITY.into(),
+                true.into(),
+            );
             WorkerSetTarget::Committed(CommittedWorkerSetTarget {
                 endpoint: endpoint.clone(),
                 group: endpoint.id().to_string(),
@@ -917,6 +928,7 @@ mod tests {
             LoadThresholdHandle::new(Default::default()),
             drt.child_token(),
             None,
+            false,
         );
         let (admissions, admitted_ids) = watch::channel(vec![ids[0]]);
         router.set_target(Some(target(1, 64, admitted_ids)));
@@ -933,6 +945,7 @@ mod tests {
         .await
         .expect("committed prefill target must activate");
         let retired = router.binding.load_full().unwrap();
+        assert!(retired.native.is_none());
         let chooser = retired
             .router
             .kv_router_if_enabled()
