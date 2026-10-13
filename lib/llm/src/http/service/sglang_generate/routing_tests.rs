@@ -7,18 +7,15 @@ const BODY: &[u8] = br#"{"input_ids": [[1,2], [3]], "stream":false, "routed_dp_r
 
 #[test]
 fn kv_routing_uses_the_first_prompt_and_rejects_opaque_inputs() {
-    let input = Projection::read(BODY, &HeaderMap::new())
-        .unwrap()
-        .routing_input(None, true)
-        .unwrap();
-    assert_eq!(&*input.0, &[1, 2]);
+    let input = Projection::read(BODY, &HeaderMap::new()).unwrap();
+    assert_eq!(input.kv_tokens(None).unwrap(), [1, 2]);
     let input = Projection::read(
         br#"{"image_data":"opaque","sampling_params":{"n":128}}"#,
         &HeaderMap::new(),
     )
     .unwrap();
-    assert!(input.clone().routing_input(None, true).is_err());
-    assert!(input.routing_input(None, false).unwrap().0.is_empty());
+    assert!(input.kv_tokens(None).is_err());
+    assert!(input.routing_hints().is_ok());
 }
 
 #[test]

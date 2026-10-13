@@ -112,6 +112,7 @@ impl NativeGenerateBinding {
         guard.mark_error(ErrorType::Cancelled);
         let request = NativeRequest {
             input: projection,
+            kv_tokens: Default::default(),
             metadata,
             deadline: Instant::now() + Duration::from_secs(30),
             wire: http::Request {
@@ -177,22 +178,21 @@ impl NativeGenerateBinding {
             requested_rank.is_none_or(|rank| ranks.contains(&rank)),
             NativeRequestError(anyhow::anyhow!("DP rank is outside the admitted WorkerSet"))
         );
-        let tokenizer = self.tokenizer.clone();
-        let projection = request.input.clone();
-        let input = tokio::task::spawn_blocking(move || {
-            projection.routing_input(tokenizer.as_ref(), uses_kv)
-        })
-        .await?
-        .map_err(NativeRequestError)?;
+        let hints = request.input.routing_hints().map_err(NativeRequestError)?;
+        let tokens = if uses_kv {
+            request.kv_tokens(self.tokenizer.as_ref()).await?
+        } else {
+            Arc::default()
+        };
         let routing = PreprocessedRequest::builder()
             .model(target.card.name().to_string())
-            .token_ids(input.0)
+            .token_ids(tokens)
             .stop_conditions(Default::default())
             .sampling_options(Default::default())
             .output_options(Default::default())
             .routing(Some(RoutingHints {
                 routing_constraints: Some(constraints),
-                ..input.1
+                ..hints
             }))
             .build()?;
         let routing = Context::with_id_and_metadata(
@@ -251,9 +251,28 @@ struct Projection {
 
 struct NativeRequest {
     input: Projection,
+    kv_tokens: tokio::sync::OnceCell<Arc<Vec<u32>>>,
     wire: http::Request,
     metadata: BTreeMap<String, String>,
     deadline: Instant,
+}
+
+impl NativeRequest {
+    /// Prompt tokens for KV routing. P/D stages share one tokenization.
+    async fn kv_tokens(&self, tokenizer: Option<&Tokenizer>) -> anyhow::Result<Arc<Vec<u32>>> {
+        self.kv_tokens
+            .get_or_try_init(|| async {
+                let tokenizer = tokenizer.cloned();
+                let projection = self.input.clone();
+                let tokens =
+                    tokio::task::spawn_blocking(move || projection.kv_tokens(tokenizer.as_ref()))
+                        .await?
+                        .map_err(NativeRequestError)?;
+                anyhow::Ok(Arc::new(tokens))
+            })
+            .await
+            .cloned()
+    }
 }
 
 impl Projection {
@@ -336,31 +355,20 @@ impl Projection {
 
     // Route a batch as one HTTP request using its first prompt. SGLang owns
     // sample/beam expansion; accounting follows HTTP rather than child requests.
-    fn routing_input(
-        self,
-        tokenizer: Option<&Tokenizer>,
-        uses_kv: bool,
-    ) -> anyhow::Result<(Arc<Vec<u32>>, RoutingHints)> {
+    fn kv_tokens(&self, tokenizer: Option<&Tokenizer>) -> anyhow::Result<Vec<u32>> {
         anyhow::ensure!(
-            self.raw("session_params").is_none(),
-            "native sessions are outside this endpoint's scope"
-        );
-        anyhow::ensure!(
-            !uses_kv
-                || [
-                    "input_embeds",
-                    "image_data",
-                    "video_data",
-                    "audio_data",
-                    "extra_key"
-                ]
-                .iter()
-                .all(|key| self.raw(key).is_none()),
+            [
+                "input_embeds",
+                "image_data",
+                "video_data",
+                "audio_data",
+                "extra_key"
+            ]
+            .iter()
+            .all(|key| self.raw(key).is_none()),
             "these inputs require a load-based routing policy"
         );
-        let tokens = if !uses_kv {
-            Vec::new()
-        } else if let Some(ids) = self.field::<Value>("input_ids")? {
+        let tokens: Vec<u32> = if let Some(ids) = self.field::<Value>("input_ids")? {
             let ids = match ids {
                 Value::Array(mut ids) if ids.first().is_some_and(Value::is_array) => {
                     ids.swap_remove(0)
@@ -379,30 +387,35 @@ impl Projection {
                 .to_vec()
         };
         anyhow::ensure!(
-            !uses_kv || !tokens.is_empty(),
+            !tokens.is_empty(),
             "KV routing requires nonempty prompt tokens"
+        );
+        Ok(tokens)
+    }
+
+    fn routing_hints(&self) -> anyhow::Result<RoutingHints> {
+        anyhow::ensure!(
+            self.raw("session_params").is_none(),
+            "native sessions are outside this endpoint's scope"
         );
         #[derive(serde::Deserialize, Default)]
         struct SamplingHint {
             max_new_tokens: Option<u32>,
         }
         let priority: i32 = self.field("priority")?.unwrap_or_default();
-        Ok((
-            Arc::new(tokens),
-            RoutingHints {
-                expected_output_tokens: self
-                    .first::<SamplingHint>("sampling_params")?
-                    .unwrap_or_default()
-                    .max_new_tokens,
-                priority: Some(priority),
-                priority_jump: Some(priority.max(0) as f64),
-                lora_name: self.first("lora_path")?,
-                cache_namespace: self
-                    .first::<String>("cache_salt")?
-                    .filter(|s| !s.is_empty()),
-                ..Default::default()
-            },
-        ))
+        Ok(RoutingHints {
+            expected_output_tokens: self
+                .first::<SamplingHint>("sampling_params")?
+                .unwrap_or_default()
+                .max_new_tokens,
+            priority: Some(priority),
+            priority_jump: Some(priority.max(0) as f64),
+            lora_name: self.first("lora_path")?,
+            cache_namespace: self
+                .first::<String>("cache_salt")?
+                .filter(|s| !s.is_empty()),
+            ..Default::default()
+        })
     }
 }
 
