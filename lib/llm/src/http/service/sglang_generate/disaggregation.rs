@@ -48,10 +48,11 @@ impl NativeGenerateBinding {
             ("bootstrap_room", room),
             ("disagg_prefill_dp_rank", Value::from(rank)),
         ];
-        let collect = projection
-            .raw("return_logprob")
-            .is_some_and(|v| v.get() == "true")
-            && !projection.field::<bool>("stream")?.unwrap_or(false);
+        // Batch requests may send a list; only a scalar `true` gets the prefill merge.
+        let collect = matches!(
+            projection.field::<Value>("return_logprob")?,
+            Some(Value::Bool(true))
+        ) && !projection.field::<bool>("stream")?.unwrap_or(false);
         if collect {
             request
                 .wire
