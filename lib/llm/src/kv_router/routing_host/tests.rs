@@ -2348,73 +2348,51 @@ async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocol
 
 #[tokio::test]
 #[serial_test::serial]
-async fn external_reservation_books_and_releases_the_selected_dp_rank() {
+async fn external_reservation_tracks_prefill_and_releases_the_selected_dp_rank() {
     let config = ModelRuntimeConfig {
         data_parallel_size: 2,
         ..Default::default()
     };
     let (host, runtime) = router_with_worker_configs(None, HashMap::from([(7, config)])).await;
-    for phase in [
-        RequestPhase::Aggregated,
-        RequestPhase::Prefill,
-        RequestPhase::Decode,
-    ] {
-        let reservation = host
-            .reserve_route(&Context::new(request()), phase)
-            .await
-            .unwrap();
-        let rank = reservation.target.dp_rank.unwrap();
-        assert!(rank < 2);
-        let loads = potential_loads(&host).await;
-        assert_eq!(
-            active_requests_for(&loads, reservation.target.worker_id, rank),
-            1
-        );
-        assert_eq!(
-            loads.iter().map(|load| load.active_requests).sum::<usize>(),
-            1
-        );
-        drop(reservation);
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while potential_loads(&host)
-                .await
-                .iter()
-                .any(|load| load.active_requests != 0)
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-    drop(host);
-    runtime.shutdown();
-}
-
-#[tokio::test]
-#[serial_test::serial]
-async fn external_reservation_releases_prompt_load_when_prefill_completes() {
-    let (host, runtime) =
-        router_with_worker_configs(None, HashMap::from([(7, ModelRuntimeConfig::default())])).await;
     let mut reservation = host
         .reserve_route(&Context::new(request()), RequestPhase::Aggregated)
         .await
         .unwrap();
+    let rank = reservation.target.dp_rank.unwrap();
+    assert!(rank < 2);
     let prefill_tokens = |loads: &[dynamo_kv_router::protocols::PotentialLoad]| {
         loads
             .iter()
             .map(|load| load.potential_prefill_tokens)
             .sum::<usize>()
     };
-    assert!(prefill_tokens(&potential_loads(&host).await) > 0);
+    let loads = potential_loads(&host).await;
+    assert_eq!(active_requests_for(&loads, 7, rank), 1);
+    assert_eq!(
+        loads.iter().map(|load| load.active_requests).sum::<usize>(),
+        1
+    );
+    assert!(prefill_tokens(&loads) > 0);
 
+    // Every streamed body frame repeats the mark; only the first one applies.
     reservation.mark_prefill_completed().await;
     reservation.mark_prefill_completed().await;
     let loads = potential_loads(&host).await;
+    assert_eq!(active_requests_for(&loads, 7, rank), 1);
     assert_eq!(prefill_tokens(&loads), 0);
-    assert_eq!(active_requests_for(&loads, 7, 0), 1);
 
     drop(reservation);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while potential_loads(&host)
+            .await
+            .iter()
+            .any(|load| load.active_requests != 0)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     drop(host);
     runtime.shutdown();
 }

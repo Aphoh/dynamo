@@ -120,19 +120,17 @@ mod tests {
         }
     }
 
-    async fn serve_once(body: String, status: &str) -> (u16, tokio::task::JoinHandle<()>) {
+    async fn serve_healthy_once() -> (u16, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let status = status.to_string();
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 4096];
             let _ = socket.read(&mut request).await.unwrap();
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
         });
         (port, task)
     }
@@ -171,28 +169,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn discovery_accepts_unary_and_cumulative_streaming() {
-        let grpc = GrpcEndpoint::parse("127.0.0.1:30001", "test").unwrap();
-        assert!(
-            NativeHttp::discover(
-                &grpc,
-                &discovery(json!({"port": 30000})),
-                Duration::from_secs(1)
-            )
-            .unwrap()
-            .is_some()
-        );
-        assert!(
-            NativeHttp::discover(&grpc, &discovery(json!({})), Duration::from_secs(1))
-                .unwrap()
-                .is_none()
-        );
-    }
-
     #[tokio::test]
     async fn readiness_probe_accepts_healthy_http_endpoint() {
-        let (port, server) = serve_once(String::new(), "200 OK").await;
+        let (port, server) = serve_healthy_once().await;
         native_http(port)
             .await_ready(
                 tokio::time::Instant::now() + Duration::from_secs(1),

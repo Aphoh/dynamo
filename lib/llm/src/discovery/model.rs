@@ -923,9 +923,6 @@ mod tests {
             VLLM_ENABLE_TOWER_CONNECTOR_LORA_RUNTIME_KEY.to_string(),
             tower_connector_lora_enabled.into(),
         );
-        card.runtime_config
-            .runtime_data
-            .insert(HTTP_CAPABILITY.into(), true.into());
         let engine: GenerateStreamingEngine = Arc::new(StubGenerateEngine);
         let mut worker_set =
             WorkerSet::new(namespace.to_string(), format!("{namespace}-checksum"), card);
@@ -1110,7 +1107,6 @@ mod tests {
         worker_tx_b.send(vec![]).expect("disable worker set B");
         model.add_worker_set("ns-a".to_string(), worker_set_a);
         model.add_worker_set("ns-b".to_string(), worker_set_b);
-        assert!(!model.has_generate_engine_for_capability(HTTP_CAPABILITY));
 
         let selection_a = model
             .get_generate_engine_for_capability_with_routing(VLLM_INFERENCE_V1_GENERATE_CAPABILITY)
@@ -1130,6 +1126,19 @@ mod tests {
         assert_eq!(selection_b.kv_cache_block_size, 32);
         assert_eq!(selection_b.lora_name.as_deref(), Some("adapter-b"));
         assert!(selection_b.tower_connector_lora_enabled);
+    }
+
+    #[test]
+    fn native_generate_capability_requires_a_frontend_binding() {
+        let mut card = ModelDeploymentCard::default();
+        card.runtime_config
+            .runtime_data
+            .insert(HTTP_CAPABILITY.into(), true.into());
+        let mut worker_set = WorkerSet::new("ns".to_string(), "ns-checksum".to_string(), card);
+        worker_set.generate_engine = Some(Arc::new(StubGenerateEngine));
+        let model = Model::new("generate-model".to_string());
+        model.add_worker_set("ns".to_string(), Arc::new(worker_set));
+        assert!(!model.has_generate_engine_for_capability(HTTP_CAPABILITY));
     }
 
     fn make_realtime_worker_set(namespace: &str) -> Arc<WorkerSet> {
