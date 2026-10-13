@@ -55,7 +55,7 @@ async fn response(
         .unwrap_or_default();
     let body: futures::stream::BoxStream<'static, anyhow::Result<bytes::Bytes>> = Box::pin(
         async_stream::try_stream! {
-            let _reservation = reservation;
+            let mut reservation = reservation;
             loop {
                 let frame = tokio::select! {
                     biased;
@@ -63,7 +63,13 @@ async fn response(
                     frame = stream.next() => frame.ok_or_else(|| anyhow::anyhow!("HTTP response was truncated")),
                 }?;
                 match frame.into_data()? {
-                    Some(ResponseFrame::Body(bytes)) => yield bytes,
+                    Some(ResponseFrame::Body(bytes)) => {
+                        // Body bytes follow prefill. A unary body arrives only at completion.
+                        if let Some(reservation) = reservation.as_mut() {
+                            reservation.mark_prefill_completed().await;
+                        }
+                        yield bytes;
+                    }
                     Some(ResponseFrame::End) => return,
                     _ => Err(anyhow::anyhow!("invalid HTTP response frame"))?,
                 }

@@ -2391,6 +2391,34 @@ async fn external_reservation_books_and_releases_the_selected_dp_rank() {
     runtime.shutdown();
 }
 
+#[tokio::test]
+#[serial_test::serial]
+async fn external_reservation_releases_prompt_load_when_prefill_completes() {
+    let (host, runtime) =
+        router_with_worker_configs(None, HashMap::from([(7, ModelRuntimeConfig::default())])).await;
+    let mut reservation = host
+        .reserve_route(&Context::new(request()), RequestPhase::Aggregated)
+        .await
+        .unwrap();
+    let prefill_tokens = |loads: &[dynamo_kv_router::protocols::PotentialLoad]| {
+        loads
+            .iter()
+            .map(|load| load.potential_prefill_tokens)
+            .sum::<usize>()
+    };
+    assert!(prefill_tokens(&potential_loads(&host).await) > 0);
+
+    reservation.mark_prefill_completed().await;
+    reservation.mark_prefill_completed().await;
+    let loads = potential_loads(&host).await;
+    assert_eq!(prefill_tokens(&loads), 0);
+    assert_eq!(active_requests_for(&loads, 7, 0), 1);
+
+    drop(reservation);
+    drop(host);
+    runtime.shutdown();
+}
+
 fn active_requests_for(
     loads: &[dynamo_kv_router::protocols::PotentialLoad],
     worker_id: u64,

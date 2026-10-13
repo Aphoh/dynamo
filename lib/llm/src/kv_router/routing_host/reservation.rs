@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
+use dynamo_kv_router::scheduling::queue::SchedulerBookingDescriptor;
 use dynamo_runtime::pipeline::{AsyncEngineContextProvider, SingleIn};
 use dynamo_runtime::pipeline::{OccupancyReservation, RouteTarget};
 use tokio_util::sync::CancellationToken;
@@ -10,7 +13,7 @@ use super::{
     kv_selection::{RoutingRequestParts, SelectionOptions},
 };
 use crate::{
-    kv_router::{FindBestMatchAdmission, request_lease::RequestAttemptLease},
+    kv_router::{FindBestMatchAdmission, KvRouter, request_lease::RequestAttemptLease},
     protocols::common::{preprocessor::PreprocessedRequest, timing::RequestPhase},
 };
 
@@ -62,7 +65,7 @@ impl RoutingHost {
                 .register_local(booking.commit(), None);
             return Ok(RouteReservation::new(
                 RouteTarget::new(selection.worker.worker_id, Some(selection.worker.dp_rank)),
-                Some(lease),
+                Some((Arc::clone(router), lease)),
                 None,
             ));
         }
@@ -83,6 +86,7 @@ impl RoutingHost {
 pub(crate) struct RouteReservation {
     pub(crate) target: RouteTarget,
     pub(crate) cancel: CancellationToken,
+    prefill_booking: Option<(Arc<KvRouter>, SchedulerBookingDescriptor)>,
     _done: tokio_util::sync::DropGuard,
     _occupancy: Option<OccupancyReservation>,
 }
@@ -90,12 +94,15 @@ pub(crate) struct RouteReservation {
 impl RouteReservation {
     fn new(
         target: RouteTarget,
-        lease: Option<RequestAttemptLease>,
+        lease: Option<(Arc<KvRouter>, RequestAttemptLease)>,
         occupancy: Option<OccupancyReservation>,
     ) -> Self {
         let cancel = CancellationToken::new();
         let done = cancel.clone().drop_guard();
-        if let Some(lease) = lease {
+        let prefill_booking = lease
+            .as_ref()
+            .map(|(router, lease)| (Arc::clone(router), lease.booking().clone()));
+        if let Some((_, lease)) = lease {
             let cancelled = cancel.clone();
             tokio::spawn(async move {
                 let expiry =
@@ -119,8 +126,24 @@ impl RouteReservation {
         Self {
             target,
             cancel,
+            prefill_booking,
             _done: done,
             _occupancy: occupancy,
+        }
+    }
+
+    /// Release the booking's prompt load once the engine returns output.
+    /// Later calls are no-ops.
+    pub(crate) async fn mark_prefill_completed(&mut self) {
+        let Some((router, booking)) = self.prefill_booking.take() else {
+            return;
+        };
+        if let Err(error) = router.mark_prefill_completed_if_booking(&booking).await {
+            tracing::warn!(
+                request_id = %booking.request_id,
+                %error,
+                "Failed to mark prefill completed"
+            );
         }
     }
 }
